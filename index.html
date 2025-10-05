@@ -1,0 +1,51 @@
+<div id="splash-screen">
+  <h1>BG-Remover</h1>
+  <p>For Mobile Devices</p>
+  <div class="loader"></div>
+</div>
+
+<div class="app-container hidden">
+  
+  <main class="main-content">
+    
+    <div class="upload-section glass-card">
+      <h2>1. Select Image</h2>
+      <input type="file" id="image-upload" accept="image/*" multiple>
+      <label for="image-upload" id="file-label">
+        <span class="icon">👆</span>
+        <p>Tap to select or drag image(s)</p>
+        <p id="file-count-display"></p>
+      </label>
+      
+      <div id="progress-container" class="hidden">
+        <p id="current-file-name"></p>
+        <div id="progress-bar-bg">
+          <div id="progress-bar"></div>
+        </div>
+        <p id="progress-text">0% Complete</p>
+      </div>
+      
+      <button id="remove-bg-btn" class="primary-btn" disabled>
+        Remove Background
+      </button>
+      
+      <div id="error-message" class="error-text hidden"></div>
+    </div>
+    
+    <h2>2. Results</h2>
+    <div id="results-display" class="results-grid">
+      <p class="empty-message">Processed images will appear here.</p>
+    </div>
+    
+    <div class="history-panel glass-card">
+        <h2>3. History & Batch Actions</h2>
+        <div id="history-list">
+            <p class="empty-message">No images processed yet.</p>
+        </div>
+        <div class="history-actions">
+            <button id="download-all-btn" class="primary-btn" disabled>Download All (ZIP)</button>
+            <button id="clear-history-btn" class="secondary-btn" disabled>Clear History</button>
+        </div>
+    </div>
+  </main>
+</div>
