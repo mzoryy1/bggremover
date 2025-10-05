@@ -1,331 +1,392 @@
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap');
+// NOTE: For a real-world Android app, this API key MUST be stored on a secure backend server.
+const REMOVE_BG_API_KEY = 'P61GTYVnBgZ1UVeVKUqT9WCS';
+const REMOVE_BG_API_URL = 'https://api.remove.bg/v1.0/removebg';
+const MAX_FILE_COUNT = 5;
+const LOCAL_STORAGE_KEY = 'bgRemoverHistory'; // Key for persistent storage
 
-:root {
-  --primary-color: #00bcd4; /* Cyan */
-  --secondary-color: #2c3e50; /* Dark Blue */
-  --glass-bg: rgba(255, 255, 255, 0.15); /* Slightly less transparent for mobile readability */
-  --glass-border: rgba(255, 255, 255, 0.3);
-  --shadow: 0 4px 16px 0 rgba(31, 38, 135, 0.37); /* Reduced shadow for mobile performance */
-  --backdrop-filter: blur(8px);
-  --radius: 12px;
+// DOM Elements
+const splashScreen = document.getElementById('splash-screen');
+const appContainer = document.querySelector('.app-container');
+const imageUpload = document.getElementById('image-upload');
+const fileLabel = document.getElementById('file-label');
+const fileCountDisplay = document.getElementById('file-count-display');
+const removeBgBtn = document.getElementById('remove-bg-btn');
+const progressContainer = document.getElementById('progress-container');
+const progressBar = document.getElementById('progress-bar');
+const progressText = document.getElementById('progress-text');
+const currentFileNameEl = document.getElementById('current-file-name');
+const errorMessageEl = document.getElementById('error-message');
+const historyList = document.getElementById('history-list');
+const clearHistoryBtn = document.getElementById('clear-history-btn');
+const downloadAllBtn = document.getElementById('download-all-btn');
+const resultsDisplay = document.getElementById('results-display');
+
+let processedImages = [];
+let filesToProcess = [];
+let isProcessing = false;
+
+// ------------------- History Management (Fixes Persistence) -------------------
+
+function saveHistory() {
+    try {
+        // Save only the essential data (url and name) to prevent LocalStorage limits
+        const serializableHistory = processedImages.map(item => ({
+            url: item.url,
+            name: item.name
+        }));
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(serializableHistory));
+    } catch (e) {
+        console.error("Error saving history to Local Storage:", e);
+        showError("History could not be saved. Clear your browser storage if this persists.");
+    }
 }
 
-* {
-  box-sizing: border-box;
-  -webkit-tap-highlight-color: transparent; /* Remove tap highlight on Android */
+function loadHistory() {
+    try {
+        const storedHistory = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (storedHistory) {
+            processedImages = JSON.parse(storedHistory);
+            updateHistoryUI();
+            
+            // Re-display results in the grid from history
+            processedImages.forEach(item => {
+                displayResult(item.url, item.name, false); // Add to grid without adding to history again
+            });
+        }
+    } catch (e) {
+        console.error("Error loading history from Local Storage:", e);
+        localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear corrupt data
+    }
 }
 
-body, html {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  font-family: 'Poppins', sans-serif;
-  color: #fff;
-  /* Reduced gradient size for faster mobile rendering */
-  background: linear-gradient(135deg, #1f4287, #21e4b9, #5668d2);
-  background-size: 200% 200%;
-  animation: gradientBG 10s ease infinite;
-  overflow-x: hidden; /* Prevent horizontal scroll */
+function updateHistoryUI() {
+  historyList.innerHTML = '';
+  
+  if (processedImages.length === 0) {
+    historyList.innerHTML = '<p class="empty-message">No images processed yet.</p>';
+    // Also remove empty message from results grid if no images were processed
+    const emptyMsg = resultsDisplay.querySelector('.empty-message');
+    if (!emptyMsg) {
+        resultsDisplay.innerHTML = '<p class="empty-message">Processed images will appear here.</p>';
+    }
+    clearHistoryBtn.disabled = true;
+    downloadAllBtn.disabled = true;
+    return;
+  }
+
+  processedImages.forEach((item) => {
+    const itemEl = document.createElement('div');
+    itemEl.classList.add('history-item');
+    
+    const img = new Image();
+    img.src = item.url;
+    
+    const details = document.createElement('div');
+    details.classList.add('history-item-details');
+    details.innerHTML = `<p class="filename">${item.name}</p><p>Completed</p>`;
+    
+    const downloadBtn = document.createElement('button');
+    downloadBtn.classList.add('download-single-btn');
+    downloadBtn.textContent = 'Download';
+    // Use the robust download function
+    downloadBtn.onclick = () => downloadSingleImage(item.url, item.name);
+
+    itemEl.appendChild(img);
+    itemEl.appendChild(details);
+    itemEl.appendChild(downloadBtn);
+    historyList.prepend(itemEl); // Show newest first in history list
+  });
+  
+  clearHistoryBtn.disabled = false;
+  downloadAllBtn.disabled = false;
 }
 
-@keyframes gradientBG {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+// ------------------- UI & Logic Functions -------------------
+
+function updateUploadUI() {
+  const count = filesToProcess.length;
+  fileCountDisplay.textContent = count > 0 ? `${count} file${count > 1 ? 's' : ''} ready.` : '';
+  removeBgBtn.disabled = count === 0 || isProcessing;
 }
 
-/* ------------------- Splash Screen ------------------- */
-#splash-screen {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  background: linear-gradient(135deg, #1f4287, #21e4b9, #5668d2);
-  z-index: 1000;
-  transition: opacity 0.8s ease-out;
+function setProcessingState(processing) {
+  isProcessing = processing;
+  removeBgBtn.disabled = processing || filesToProcess.length === 0;
+  removeBgBtn.textContent = processing ? 'Processing...' : 'Remove Background';
+  progressContainer.classList.toggle('hidden', !processing);
 }
 
-#splash-screen h1 {
-  font-size: 2.5em; /* Adjusted for mobile */
-  margin-bottom: 5px;
-  text-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+function updateProgress(fileName, index, total) {
+  const percentage = total > 0 ? Math.round((index / total) * 100) : 0;
+  progressBar.style.width = `${percentage}%`;
+  progressText.textContent = `${percentage}% Complete (${index}/${total} images)`;
+  currentFileNameEl.textContent = `Processing: ${fileName}`;
 }
 
-.loader {
-  border: 3px solid rgba(255, 255, 255, 0.3);
-  border-top: 3px solid #fff;
-  border-radius: 50%;
-  width: 30px;
-  height: 30px;
-  animation: spin 1s linear infinite;
+function showError(message) {
+  errorMessageEl.textContent = message;
+  errorMessageEl.classList.remove('hidden');
+  setTimeout(() => errorMessageEl.classList.add('hidden'), 6000);
 }
 
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+function displayResult(url, name, addToHistory = true) {
+  const emptyMsg = resultsDisplay.querySelector('.empty-message');
+  if (emptyMsg) emptyMsg.remove();
+  
+  const card = document.createElement('div');
+  card.classList.add('result-card');
+  
+  const imgContainer = document.createElement('div');
+  imgContainer.classList.add('result-image-container');
+  
+  const img = new Image();
+  img.src = url;
+  
+  imgContainer.appendChild(img);
+  
+  const title = document.createElement('p');
+  title.textContent = name;
+  title.style.fontSize = '0.9em';
+  title.style.fontWeight = '600';
+
+  const downloadBtn = document.createElement('button');
+  downloadBtn.classList.add('download-single-btn');
+  downloadBtn.textContent = 'Download PNG';
+  downloadBtn.onclick = () => downloadSingleImage(url, name);
+  
+  card.appendChild(imgContainer);
+  card.appendChild(title);
+  card.appendChild(downloadBtn);
+  resultsDisplay.prepend(card);
+
+  // If loading from history, we don't save it again.
+  if (addToHistory) {
+      // Add a placeholder for originalFile to satisfy history saving structure
+      processedImages.push({ url, name }); 
+      updateHistoryUI();
+      saveHistory(); // Save immediately after successful process
+  }
 }
 
-/* ------------------- Glassmorphism & Layout ------------------- */
-.glass-card {
-  background: var(--glass-bg);
-  box-shadow: var(--shadow);
-  backdrop-filter: var(--backdrop-filter);
-  -webkit-backdrop-filter: var(--backdrop-filter);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius);
-  padding: 15px; /* Reduced padding for mobile */
-  margin-bottom: 20px;
+// ------------------- Core API Function -------------------
+
+async function removeBackground(file) {
+  const formData = new FormData();
+  formData.append('image_file', file);
+  formData.append('size', 'auto');
+  formData.append('format', 'png');
+
+  try {
+    const response = await fetch(REMOVE_BG_API_URL, {
+      method: 'POST',
+      headers: {
+        'X-Api-Key': REMOVE_BG_API_KEY,
+        'Accept': 'image/png'
+      },
+      body: formData,
+    });
+
+    if (response.ok) {
+      const blob = await response.blob();
+      // Convert Blob to Data URL for persistence in Local Storage
+      return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+      });
+    } else {
+      const errorText = await response.text();
+      let msg = `API Error: ${response.status}`;
+      try {
+        const json = JSON.parse(errorText);
+        msg = json.errors ? json.errors[0].title : msg;
+      } catch (e) {}
+      throw new Error(msg);
+    }
+
+  } catch (error) {
+    throw new Error(error.message || 'Network error or file processing failed.');
+  }
 }
 
-.app-container {
-  padding: 15px;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column; /* Single column layout */
+// ------------------- Main Process -------------------
+
+async function processAllFiles() {
+  if (isProcessing || filesToProcess.length === 0) return;
+
+  setProcessingState(true);
+  let errorOccurred = false;
+  const totalFiles = filesToProcess.length;
+
+  for (let i = 0; i < totalFiles; i++) {
+    const file = filesToProcess[i];
+    const originalName = file.name.replace(/\.[^/.]+$/, "");
+    const newFileName = `${originalName}-no-bg.png`;
+
+    updateProgress(file.name, i + 1, totalFiles);
+    
+    try {
+      const resultUrl = await removeBackground(file); 
+      displayResult(resultUrl, newFileName);
+      
+    } catch (error) {
+      showError(`Failed to process ${file.name}: ${error.message}`);
+      errorOccurred = true;
+    }
+  }
+
+  // Final cleanup
+  filesToProcess = [];
+  imageUpload.value = null;
+  setProcessingState(false);
+  
+  if (!errorOccurred) {
+      updateProgress('All files processed!', totalFiles, totalFiles);
+      setTimeout(() => progressContainer.classList.add('hidden'), 2000);
+  }
+  updateUploadUI();
 }
 
-.main-content {
-  flex-grow: 1;
-  width: 100%;
-  max-width: 500px; /* Max width for central content on larger phones/tablets */
-  margin: 0 auto; /* Center the content */
+// ------------------- Download Functions (Fixes Storage/Closing Error) -------------------
+
+/**
+ * Robustly downloads a single image (Data URL).
+ */
+function downloadSingleImage(url, name) {
+    try {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = name;
+        
+        // This is a common pattern to trigger downloads robustly on mobile
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    } catch (e) {
+        showError("Download failed. Your device might be blocking the file. Try downloading the ZIP.");
+        console.error("Download Error:", e);
+    }
 }
 
-h2 {
-  margin-top: 20px;
-  margin-bottom: 10px;
-  font-weight: 600;
-  font-size: 1.4em;
-  color: #fff;
+/**
+ * Downloads all processed images as a ZIP file. (Requires JSZip library)
+ */
+async function downloadAllAsZip() {
+  if (processedImages.length === 0) return;
+  
+  downloadAllBtn.textContent = 'Creating ZIP...';
+  downloadAllBtn.disabled = true;
+
+  if (typeof JSZip === 'undefined') {
+    showError('JSZip library is missing. Cannot create ZIP.');
+    downloadAllBtn.textContent = 'Download All (ZIP)';
+    downloadAllBtn.disabled = false;
+    return;
+  }
+  
+  const zip = new JSZip();
+
+  // Add files to zip using base64 data directly from the Data URL
+  for (const item of processedImages) {
+    try {
+      const base64Data = item.url.split(',')[1];
+      zip.file(item.name, base64Data, {base64: true});
+    } catch(e) {
+      console.warn(`Skipping zip file for ${item.name}: Invalid Data URL.`);
+    }
+  }
+
+  zip.generateAsync({ type: 'blob' })
+    .then(content => {
+      const zipName = `background-removed-${Date.now()}.zip`;
+      
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(content);
+      link.download = zipName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      URL.revokeObjectURL(link.href);
+      
+      downloadAllBtn.textContent = 'Download All (ZIP)';
+      downloadAllBtn.disabled = false;
+    })
+    .catch(error => {
+      showError('Failed to create ZIP file. Device storage issue?');
+      console.error(error);
+      downloadAllBtn.textContent = 'Download All (ZIP)';
+      downloadAllBtn.disabled = false;
+    });
 }
 
-/* ------------------- Upload & Button ------------------- */
-#image-upload {
-  display: none;
+function clearHistory() {
+  if (!confirm('Are you sure you want to clear all history and processed images?')) return;
+  processedImages = [];
+  resultsDisplay.innerHTML = '<p class="empty-message">Processed images will appear here.</p>';
+  localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear persistent storage
+  updateHistoryUI();
 }
 
-#file-label {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 120px; /* Smaller height for mobile */
-  border: 2px dashed var(--glass-border);
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: background-color 0.3s ease;
-  padding: 10px;
-  text-align: center;
-  font-size: 0.9em;
+// ------------------- Event Listeners -------------------
+
+// 1. Splash Screen Timeout & Load History
+window.addEventListener('load', () => {
+  loadHistory(); // Load history when the app starts
+  setTimeout(() => {
+    splashScreen.style.opacity = '0';
+    appContainer.classList.remove('hidden');
+    setTimeout(() => {
+      splashScreen.style.display = 'none';
+    }, 800); 
+  }, 1000);
+});
+
+// 2. File Input Change
+imageUpload.addEventListener('change', (e) => {
+  const newFiles = Array.from(e.target.files);
+  if (newFiles.length > MAX_FILE_COUNT) {
+    showError(`Max ${MAX_FILE_COUNT} files allowed.`);
+    imageUpload.value = null;
+    filesToProcess = [];
+  } else {
+    filesToProcess = newFiles;
+  }
+  updateUploadUI();
+});
+
+// 3. Button Clicks
+removeBgBtn.addEventListener('click', processAllFiles);
+clearHistoryBtn.addEventListener('click', clearHistory);
+downloadAllBtn.addEventListener('click', downloadAllAsZip);
+
+// 4. Drag and Drop handlers
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+  fileLabel.addEventListener(eventName, preventDefaults, false);
+});
+['dragenter', 'dragover'].forEach(eventName => {
+  fileLabel.addEventListener(eventName, () => fileLabel.style.backgroundColor = 'rgba(0, 188, 212, 0.1)', false);
+});
+['dragleave', 'drop'].forEach(eventName => {
+  fileLabel.addEventListener(eventName, () => fileLabel.style.backgroundColor = 'transparent', false);
+});
+
+fileLabel.addEventListener('drop', (e) => {
+  const files = e.dataTransfer.files;
+  if (files.length > MAX_FILE_COUNT) {
+    showError(`Maximum ${MAX_FILE_COUNT} files allowed.`);
+  } else {
+    imageUpload.files = files;
+    filesToProcess = Array.from(files);
+    updateUploadUI();
+  }
+}, false);
+
+function preventDefaults(e) {
+  e.preventDefault();
+  e.stopPropagation();
 }
 
-#file-label:hover {
-  background-color: rgba(255, 255, 255, 0.05);
-}
-
-#file-label .icon {
-  font-size: 2.5em;
-  margin-bottom: 5px;
-}
-
-button {
-  padding: 10px 20px; /* Reduced button padding */
-  border: none;
-  border-radius: 8px; /* Slightly less rounded */
-  font-weight: 700;
-  cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
-  width: 100%;
-  margin-top: 15px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  font-size: 0.9em;
-}
-
-.primary-btn {
-  background-color: var(--primary-color);
-  color: var(--secondary-color);
-  box-shadow: 0 4px 8px rgba(0, 188, 212, 0.4);
-}
-
-.primary-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 5px 10px rgba(0, 188, 212, 0.6);
-}
-
-.secondary-btn {
-  background-color: transparent;
-  border: 2px solid var(--primary-color);
-  color: var(--primary-color);
-}
-
-.secondary-btn:hover:not(:disabled) {
-  background-color: rgba(0, 188, 212, 0.1);
-}
-
-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-  transform: none !important;
-  box-shadow: none !important;
-}
-
-button:active {
-  transform: scale(0.98);
-}
-
-.error-text {
-  color: #ff5757;
-  padding: 8px;
-  margin-top: 10px;
-  border-radius: 5px;
-  background-color: rgba(255, 87, 87, 0.2);
-  text-align: center;
-  font-size: 0.8em;
-}
-
-/* ------------------- Progress Indicator ------------------- */
-#progress-container {
-  margin-top: 15px;
-  text-align: center;
-}
-
-#progress-bar-bg {
-  width: 100%;
-  background-color: rgba(255, 255, 255, 0.3);
-  border-radius: 8px;
-  margin: 8px 0;
-  overflow: hidden;
-}
-
-#progress-bar {
-  height: 16px; /* Reduced height */
-  width: 0%;
-  background-color: var(--primary-color);
-  border-radius: 8px;
-  transition: width 0.3s ease;
-}
-
-/* ------------------- History Panel ------------------- */
-.history-panel {
-  margin-top: 20px;
-}
-
-#history-list {
-  overflow-y: auto;
-  margin-top: 10px;
-  padding-right: 5px;
-  max-height: 300px; /* Max height to prevent history from dominating the screen */
-}
-
-.history-item {
-  display: flex;
-  align-items: center;
-  padding: 8px;
-  margin-bottom: 8px;
-  border-radius: 8px;
-  background-color: rgba(255, 255, 255, 0.1);
-  font-size: 0.8em;
-}
-
-.history-item img {
-  width: 40px;
-  height: 40px;
-  object-fit: contain;
-  margin-right: 8px;
-  border-radius: 4px;
-  background-color: rgba(255, 255, 255, 0.8);
-}
-
-.history-item-details {
-  flex-grow: 1;
-}
-
-.history-item-details p {
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.history-item-details .filename {
-  font-weight: 600;
-}
-
-.download-single-btn {
-  background-color: var(--primary-color);
-  color: var(--secondary-color);
-  padding: 4px 8px;
-  width: auto;
-  font-size: 0.7em;
-  margin-top: 0;
-}
-
-.history-actions {
-  display: flex;
-  gap: 10px;
-  padding-top: 15px;
-  border-top: 1px solid var(--glass-border);
-}
-
-.history-actions button {
-    flex: 1;
-    margin-top: 5px;
-}
-
-.empty-message {
-    text-align: center;
-    opacity: 0.7;
-    font-style: italic;
-    margin-top: 20px;
-}
-
-/* ------------------- Results Display ------------------- */
-.results-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); /* Smaller grid items */
-  gap: 15px;
-  margin-top: 10px;
-}
-
-.result-card {
-  background: var(--glass-bg);
-  box-shadow: var(--shadow);
-  backdrop-filter: var(--backdrop-filter);
-  -webkit-backdrop-filter: var(--backdrop-filter);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius);
-  padding: 10px;
-  text-align: center;
-}
-
-.result-image-container {
-  height: 120px; /* Smaller result image preview */
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background-image: linear-gradient(45deg, #ccc 25%, transparent 25%),
-                      linear-gradient(-45deg, #ccc 25%, transparent 25%),
-                      linear-gradient(45deg, transparent 75%, #ccc 75%),
-                      linear-gradient(-45deg, transparent 75%, #ccc 75%);
-  background-size: 15px 15px;
-  background-position: 0 0, 0 7.5px, 7.5px -7.5px, -7.5px 0px;
-  border-radius: 8px;
-  margin-bottom: 8px;
-  overflow: hidden;
-}
-
-.result-image-container img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
-
-.hidden {
-  display: none !important;
-}
+// Initial state setup
+updateHistoryUI(); // Call on start to ensure UI state matches loaded history
